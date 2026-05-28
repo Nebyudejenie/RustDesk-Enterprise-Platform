@@ -64,10 +64,10 @@ check_prerequisites() {
     log "INFO" "✓ Docker installed: $(docker --version)"
 
     # Check Docker Compose
-    if ! command -v docker-compose &> /dev/null; then
+    if ! command -v docker compose &> /dev/null; then
         error_exit "Docker Compose is not installed"
     fi
-    log "INFO" "✓ Docker Compose installed: $(docker-compose --version)"
+    log "INFO" "✓ Docker Compose installed: $(docker compose --version)"
 
     # Check project directory
     if [[ ! -d "$PROJECT_DIR" ]]; then
@@ -77,7 +77,7 @@ check_prerequisites() {
 
     # Check required files
     local required_files=(
-        "docker-compose.yml"
+        "docker compose.yml"
         ".env"
         "configs/RustDesk2.toml"
         "scripts/configure-firewall.sh"
@@ -113,12 +113,12 @@ deploy() {
 
     # Build/pull images if needed
     log "INFO" "Pulling Docker images..."
-    docker-compose pull >> "$LOG_FILE" 2>&1
+    docker compose pull >> "$LOG_FILE" 2>&1
     log "INFO" "✓ Docker images updated"
 
     # Start services
     log "INFO" "Starting Docker Compose services..."
-    docker-compose up -d >> "$LOG_FILE" 2>&1
+    docker compose up -d >> "$LOG_FILE" 2>&1
     log "INFO" "✓ Services started"
 
     # Wait for services to be healthy
@@ -145,7 +145,7 @@ deploy() {
 
     # Display service status
     log "INFO" "Service status:"
-    docker-compose ps | tee -a "$LOG_FILE"
+    docker compose ps | tee -a "$LOG_FILE"
 
     # Show listening ports
     log "INFO" "Listening ports:"
@@ -159,7 +159,7 @@ stop() {
     log "INFO" "Stopping RustDesk services..."
 
     cd "$PROJECT_DIR" || error_exit "Cannot change to project directory"
-    docker-compose down >> "$LOG_FILE" 2>&1
+    docker compose down >> "$LOG_FILE" 2>&1
 
     log "INFO" "✓ Services stopped"
 }
@@ -169,12 +169,12 @@ restart() {
     log "INFO" "Restarting RustDesk services..."
 
     cd "$PROJECT_DIR" || error_exit "Cannot change to project directory"
-    docker-compose restart >> "$LOG_FILE" 2>&1
+    docker compose restart >> "$LOG_FILE" 2>&1
 
     sleep 2
 
     log "INFO" "Service status:"
-    docker-compose ps
+    docker compose ps
 
     log "INFO" "✓ Services restarted"
 }
@@ -186,7 +186,7 @@ status() {
 
     cd "$PROJECT_DIR" || error_exit "Cannot change to project directory"
 
-    docker-compose ps
+    docker compose ps
 
     log "INFO" ""
     log "INFO" "Network Status:"
@@ -212,9 +212,9 @@ logs() {
     cd "$PROJECT_DIR" || error_exit "Cannot change to project directory"
 
     if [[ "$service" == "all" ]]; then
-        docker-compose logs -f
+        docker compose logs -f
     else
-        docker-compose logs -f "$service"
+        docker compose logs -f "$service"
     fi
 }
 
@@ -248,7 +248,7 @@ backup() {
     cp -r data/hbbs/keys "$backup_dir/" 2>/dev/null || true
     cp -r data/hbbr "$backup_dir/" 2>/dev/null || true
     cp .env "$backup_dir/" 2>/dev/null || true
-    cp docker-compose.yml "$backup_dir/" 2>/dev/null || true
+    cp docker compose.yml "$backup_dir/" 2>/dev/null || true
 
     log "INFO" "✓ Backup created: $backup_dir"
 }
@@ -262,14 +262,14 @@ verify() {
     local all_pass=true
 
     # Check containers
-    if docker-compose ps | grep -q "rustdesk-hbbs"; then
+    if docker compose ps | grep -q "rustdesk-hbbs"; then
         log "INFO" "✓ hbbs container is running"
     else
         log "WARN" "✗ hbbs container is NOT running"
         all_pass=false
     fi
 
-    if docker-compose ps | grep -q "rustdesk-hbbr"; then
+    if docker compose ps | grep -q "rustdesk-hbbr"; then
         log "INFO" "✓ hbbr container is running"
     else
         log "WARN" "✗ hbbr container is NOT running"
@@ -279,7 +279,7 @@ verify() {
     # Check ports
     local ports=(21115 21116 21117 21118 21119)
     for port in "${ports[@]}"; do
-        if netstat -tlnup 2>/dev/null | grep -q ":$port"; then
+        if ss -tlnup 2>/dev/null | grep -q ":$port"; then
             log "INFO" "✓ Port $port is listening"
         else
             log "WARN" "✗ Port $port is NOT listening"
@@ -308,7 +308,7 @@ cleanup() {
     read -p "Are you sure? (yes/no): " -r
     if [[ $REPLY =~ ^[Yy][Ee][Ss]$ ]]; then
         cd "$PROJECT_DIR" || error_exit "Cannot change to project directory"
-        docker-compose down -v >> "$LOG_FILE" 2>&1
+        docker compose down -v >> "$LOG_FILE" 2>&1
         log "INFO" "✓ Cleanup completed"
     else
         log "INFO" "Cleanup cancelled"
