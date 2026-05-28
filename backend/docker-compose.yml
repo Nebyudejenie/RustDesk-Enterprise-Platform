@@ -1,0 +1,136 @@
+version: '3.9'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: rustdesk-postgres
+    environment:
+      POSTGRES_DB: rustdesk_db
+      POSTGRES_USER: rustdesk_app
+      POSTGRES_PASSWORD: rustdesk_password
+      POSTGRES_INITDB_ARGS: "-c shared_buffers=256MB -c max_connections=200"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/01-schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rustdesk_app -d rustdesk_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rustdesk-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # RustDesk hbbs (Signal Server)
+  hbbs:
+    image: rustdesk/hbbs:latest
+    container_name: rustdesk-hbbs
+    environment:
+      RELAY_SERVER: hbbr:21117
+      API_ENDPOINT: http://api:8000/api/v1
+    volumes:
+      - hbbs_data:/root
+    ports:
+      - "21115:21115"
+      - "21116:21116"
+      - "21116:21116/udp"
+      - "21118:21118"
+    healthcheck:
+      test: ["CMD", "ss", "-tlnup"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rustdesk-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # RustDesk hbbr (Relay Server)
+  hbbr:
+    image: rustdesk/hbbr:latest
+    container_name: rustdesk-hbbr
+    environment:
+      RELAY_SERVER: 0.0.0.0:21117
+      API_ENDPOINT: http://api:8000/api/v1
+    volumes:
+      - hbbr_data:/root
+    ports:
+      - "21117:21117"
+      - "21117:21117/udp"
+      - "21119:21119"
+    healthcheck:
+      test: ["CMD", "ss", "-tlnup"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rustdesk-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # FastAPI Backend
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rustdesk-api
+    environment:
+      DATABASE_URL: postgresql://rustdesk_app:rustdesk_password@postgres:5432/rustdesk_db
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+    volumes:
+      - ./app:/app/app
+      - ./logs:/var/log/rustdesk
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - rustdesk-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+    driver: local
+  hbbs_data:
+    driver: local
+  hbbr_data:
+    driver: local
+
+networks:
+  rustdesk-network:
+    driver: bridge

@@ -1,0 +1,281 @@
+---
+# FastAPI ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: rustdesk-system
+data:
+  LOG_LEVEL: "INFO"
+  DEBUG: "false"
+  CORS_ORIGINS: "http://localhost:3000,http://localhost:8000"
+
+---
+# FastAPI Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-secret
+  namespace: rustdesk-system
+type: Opaque
+stringData:
+  SECRET_KEY: "your-super-secret-key-change-in-production"
+  DATABASE_URL: "postgresql://rustdesk_app:rustdesk_password@postgres-0.postgres:5432/rustdesk_db"
+
+---
+# FastAPI Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rustdesk-api
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: api
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: rustdesk
+      component: api
+  template:
+    metadata:
+      labels:
+        app: rustdesk
+        component: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: rustdesk
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - rustdesk
+                    - key: component
+                      operator: In
+                      values:
+                        - api
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: api
+          image: rustdesk/api:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: api-config
+                  key: LOG_LEVEL
+            - name: DEBUG
+              valueFrom:
+                configMapKeyRef:
+                  name: api-config
+                  key: DEBUG
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: api-secret
+                  key: SECRET_KEY
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secret
+                  key: DATABASE_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /var/log/rustdesk
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+
+---
+# FastAPI Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustdesk-api
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: api
+spec:
+  type: LoadBalancer
+  selector:
+    app: rustdesk
+    component: api
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  sessionAffinity: None
+
+---
+# Horizontal Pod Autoscaler for API
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rustdesk-api-hpa
+  namespace: rustdesk-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rustdesk-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+      selectPolicy: Max
+
+---
+# PodDisruptionBudget for API
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rustdesk-api-pdb
+  namespace: rustdesk-system
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: rustdesk
+      component: api
+
+---
+# NetworkPolicy for API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-network-policy
+  namespace: rustdesk-system
+spec:
+  podSelector:
+    matchLabels:
+      app: rustdesk
+      component: api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app: rustdesk
+              component: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: rustdesk
+              component: hbbs
+      ports:
+        - protocol: TCP
+          port: 21115
+    - to:
+        - podSelector:
+            matchLabels:
+              app: rustdesk
+              component: hbbr
+      ports:
+        - protocol: TCP
+          port: 21119

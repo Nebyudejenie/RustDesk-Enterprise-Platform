@@ -1,0 +1,201 @@
+---
+# PostgreSQL ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: rustdesk-system
+data:
+  postgresql.conf: |
+    shared_buffers = 256MB
+    max_connections = 200
+    effective_cache_size = 512MB
+    work_mem = 1310kB
+    log_statement = 'all'
+    log_duration = on
+    log_min_duration_statement = 1000
+
+---
+# PostgreSQL Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: rustdesk-system
+type: Opaque
+stringData:
+  POSTGRES_DB: rustdesk_db
+  POSTGRES_USER: rustdesk_app
+  POSTGRES_PASSWORD: rustdesk_password
+  DATABASE_URL: postgresql://rustdesk_app:rustdesk_password@postgres-0.postgres:5432/rustdesk_db
+
+---
+# PostgreSQL Service (Headless)
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: postgres
+spec:
+  clusterIP: None
+  selector:
+    app: rustdesk
+    component: postgres
+  ports:
+    - port: 5432
+      name: postgresql
+
+---
+# PostgreSQL StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rustdesk
+      component: postgres
+  template:
+    metadata:
+      labels:
+        app: rustdesk
+        component: postgres
+    spec:
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgresql
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_INITDB_ARGS
+              value: "-c shared_buffers=256MB -c max_connections=200"
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+              subPath: postgres
+            - name: postgres-config
+              mountPath: /etc/postgresql
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U rustdesk_app -d rustdesk_db
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U rustdesk_app -d rustdesk_db
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: postgres-config
+          configMap:
+            name: postgres-config
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+
+---
+# Backup CronJob for PostgreSQL
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: postgres
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: rustdesk
+          containers:
+            - name: backup
+              image: postgres:16-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  BACKUP_FILE=/backups/rustdesk_db_$(date +%Y%m%d_%H%M%S).sql
+                  pg_dump -h postgres -U rustdesk_app -d rustdesk_db > $BACKUP_FILE
+                  echo "Backup completed: $BACKUP_FILE"
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-secret
+                      key: POSTGRES_PASSWORD
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backups
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+          volumes:
+            - name: backup-storage
+              persistentVolumeClaim:
+                claimName: postgres-backup-pvc
+          restartPolicy: OnFailure
