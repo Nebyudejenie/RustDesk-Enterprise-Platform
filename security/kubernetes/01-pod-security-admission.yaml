@@ -1,0 +1,217 @@
+---
+# RustDesk Phase 3 - Kubernetes Security
+# Pod Security Admission Policies (Restricted Profile)
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: podsecuritypolicies.policy
+  labels:
+    app: rustdesk
+    security: true
+
+---
+# PodSecurityAdmission: Restricted profile for rustdesk-system namespace
+apiVersion: policy/v1
+kind: PodSecurityPolicy
+metadata:
+  name: rustdesk-restricted
+  labels:
+    app: rustdesk
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  allowedCapabilities:
+    - NET_BIND_SERVICE
+  volumes:
+    - configMap
+    - emptyDir
+    - projected
+    - secret
+    - downwardAPI
+    - persistentVolumeClaim
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: MustRunAsNonRoot
+  seLinux:
+    rule: MustRunAs
+    seLinuxOptions:
+      level: s0:c123,c456
+  fsGroup:
+    rule: MustRunAs
+    ranges:
+      - min: 1
+        max: 65535
+  readOnlyRootFilesystem: false
+
+---
+# ClusterRole: Pod Security Policy admin
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rustdesk-psp-admin
+spec:
+  rules:
+    - apiGroups: [policy]
+      resources: [podsecuritypolicies]
+      verbs: [use]
+      resourceNames:
+        - rustdesk-restricted
+
+---
+# ClusterRoleBinding: Apply PSP to rustdesk-system
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rustdesk-psp-all-serviceaccounts
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rustdesk-psp-admin
+subjects:
+  - kind: Group
+    name: system:serviceaccounts
+    apiGroup: rbac.authorization.k8s.io
+
+---
+# NetworkPolicy: Deny all ingress by default
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rustdesk-deny-all
+  namespace: rustdesk-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# NetworkPolicy: Allow DNS
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rustdesk-allow-dns
+  namespace: rustdesk-system
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+
+---
+# NetworkPolicy: Allow hbbs ingress only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rustdesk-hbbs-allow
+  namespace: rustdesk-system
+spec:
+  podSelector:
+    matchLabels:
+      app: rustdesk
+      component: hbbs
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 21115
+        - protocol: TCP
+          port: 21116
+        - protocol: UDP
+          port: 21116
+        - protocol: TCP
+          port: 21118
+
+---
+# NetworkPolicy: Allow hbbr ingress only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rustdesk-hbbr-allow
+  namespace: rustdesk-system
+spec:
+  podSelector:
+    matchLabels:
+      app: rustdesk
+      component: hbbr
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 21117
+        - protocol: UDP
+          port: 21117
+        - protocol: TCP
+          port: 21119
+
+---
+# ResourceQuota: Enforce resource limits per namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rustdesk-quota
+  namespace: rustdesk-system
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: "16Gi"
+    limits.cpu: "16"
+    limits.memory: "32Gi"
+    pods: "20"
+    services.loadbalancers: "3"
+    persistentvolumeclaims: "5"
+  scopeSelector:
+    matchExpressions:
+      - operator: In
+        scopeName: PriorityClass
+        values:
+          - high
+          - medium
+
+---
+# LimitRange: Default resource limits for pods
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: rustdesk-limits
+  namespace: rustdesk-system
+spec:
+  limits:
+    - type: Pod
+      max:
+        cpu: "4"
+        memory: "8Gi"
+      min:
+        cpu: "100m"
+        memory: "128Mi"
+    - type: Container
+      max:
+        cpu: "2"
+        memory: "4Gi"
+      min:
+        cpu: "100m"
+        memory: "128Mi"
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "250m"
+        memory: "256Mi"

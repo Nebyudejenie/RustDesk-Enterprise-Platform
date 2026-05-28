@@ -1,0 +1,252 @@
+---
+# RustDesk Phase 3 - RBAC Configuration
+# Role-Based Access Control for different user types
+
+---
+# Role: Kubernetes Administrator
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rustdesk-admin
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    role: admin
+rules:
+  # Full access to all resources in namespace
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+
+---
+# RoleBinding: Bind admin role to admin user
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rustdesk-admin-binding
+  namespace: rustdesk-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rustdesk-admin
+subjects:
+  - kind: User
+    name: admin@yourdomain.com
+    apiGroup: rbac.authorization.k8s.io
+
+---
+# Role: Support Engineer (Limited access)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rustdesk-support-engineer
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    role: support
+rules:
+  # View deployments and pods
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+
+  # View pods and logs
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+
+  # View services
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+
+  # View configmaps and secrets (read-only)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+
+  # Execute commands in pods (for debugging)
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+
+  # Port forwarding
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create", "get", "list", "watch"]
+
+  # Cannot modify resources
+  # (no create, update, patch, delete verbs)
+
+---
+# RoleBinding: Bind support engineer role to support users
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rustdesk-support-engineer-binding
+  namespace: rustdesk-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rustdesk-support-engineer
+subjects:
+  - kind: Group
+    name: support-engineers
+    apiGroup: rbac.authorization.k8s.io
+
+---
+# Role: Auditor (Read-only monitoring)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rustdesk-auditor
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    role: auditor
+rules:
+  # View all resources (read-only)
+  - apiGroups: [""]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["apps"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["batch"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["policy"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+
+  # View events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+
+  # Cannot modify anything
+  # (no create, update, patch, delete verbs)
+
+---
+# RoleBinding: Bind auditor role to audit users
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rustdesk-auditor-binding
+  namespace: rustdesk-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rustdesk-auditor
+subjects:
+  - kind: Group
+    name: auditors
+    apiGroup: rbac.authorization.k8s.io
+
+---
+# ClusterRole: Cluster-wide read-only (for auditors)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rustdesk-cluster-auditor
+  labels:
+    app: rustdesk
+    role: cluster-auditor
+rules:
+  # View all resources (cluster-wide, read-only)
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - nodes
+      - persistentvolumes
+      - pods
+      - services
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - daemonsets
+      - statefulsets
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - clusterroles
+      - clusterrolebindings
+      - roles
+      - rolebindings
+    verbs: ["get", "list", "watch"]
+
+  - apiGroups: ["policy"]
+    resources:
+      - podsecuritypolicies
+    verbs: ["get", "list", "watch"]
+
+  # Cannot modify anything
+
+---
+# ClusterRoleBinding: Bind cluster auditor role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rustdesk-cluster-auditor-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rustdesk-cluster-auditor
+subjects:
+  - kind: Group
+    name: auditors
+    apiGroup: rbac.authorization.k8s.io
+
+---
+# ServiceAccount: For CI/CD deployments
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rustdesk-deployer
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    role: deployer
+
+---
+# Role: Deployment role (for CI/CD)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rustdesk-deployer
+  namespace: rustdesk-system
+rules:
+  # Required for helm deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  - apiGroups: [""]
+    resources: ["services", "configmaps", "secrets", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  - apiGroups: ["batch"]
+    resources: ["cronjobs", "jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+---
+# RoleBinding: Bind deployer role to deployer SA
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rustdesk-deployer-binding
+  namespace: rustdesk-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rustdesk-deployer
+subjects:
+  - kind: ServiceAccount
+    name: rustdesk-deployer
+    namespace: rustdesk-system
