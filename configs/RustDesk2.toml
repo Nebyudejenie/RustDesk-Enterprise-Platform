@@ -1,0 +1,130 @@
+# RustDesk Client Configuration (RustDesk2.toml)
+# Phase 1 - Unattended Access Configuration
+# This file enables completely unattended access with no approval prompts
+# Designed for POS devices in enterprise environment
+
+# Connection Configuration
+[connection]
+# Custom relay and signal server addresses
+relay_host = "192.168.1.40"
+relay_port = 21117
+signal_server = "192.168.1.40:21115"
+relay_secret = ""
+
+# Identification
+device_id = ""  # Will be set by installer script
+custom_name = "POS Device"
+uuid = ""  # Generated on first run
+
+# Access Control & Security
+[security]
+# Permanent password for unattended access
+permanent_password = "POS@Enterprise2024!Secure"
+
+# Disable ALL user prompts and approvals
+allow_remote_keyboard_input = true
+allow_remote_mouse_input = true
+allow_file_transfer = true
+allow_remote_cm = true
+
+# Disable approval/permission dialogs completely
+ask_on_new_connection = false
+approve_without_consent = true
+accept_all_connections = true
+
+# Disable lock screen on disconnect
+lock_screen_on_disconnect = false
+
+# Disable local user interaction requirements
+require_approval = false
+require_password_on_incoming = false
+request_permission_on_incoming = false
+
+# Credentials
+[auth]
+# Use permanent password, not one-time codes
+use_permanent_password = true
+password = "POS@Enterprise2024!Secure"
+password_hash = ""  # Populated by client on first run
+
+# Service Configuration
+[service]
+# Run RustDesk service before user login
+run_as_service = true
+service_type = "system"  # system = runs as SYSTEM account
+auto_start = true
+start_on_boot = true
+
+# Logging
+[logging]
+log_level = "info"
+log_to_console = false
+log_to_file = true
+log_file = "/var/log/rustdesk/client.log"
+log_rotation_size_mb = 100
+
+# Display/UI Configuration
+[ui]
+# Disable all consent screens and dialogs
+hide_consent_dialog = true
+disable_consent = true
+disable_graphics_acceleration = false
+local_ui_enabled = false  # Disable local UI on POS device
+
+# Clipboard
+allow_clipboard = true
+clipboard_unidirectional = true  # One-way from support to POS only
+
+# File Transfer
+[files]
+allow_file_transfer = true
+file_transfer_timeout = 300
+max_file_size_mb = 0  # Unlimited
+
+# Network Settings
+[network]
+# Connection keep-alive
+keep_alive_interval = 60
+connection_timeout = 30
+max_concurrent_connections = 1
+
+# Audio/Video (disable on POS)
+[multimedia]
+enable_audio = false
+enable_video = false
+enable_camera = false
+
+# Advanced Settings
+[advanced]
+# Encrypted connection only
+encrypted_only = true
+verify_certificate = true
+
+# Automatic reconnection on network failure
+auto_reconnect = true
+reconnect_interval = 5
+max_reconnect_attempts = 0  # Infinite
+
+# Use relay server for connections (important for firewalled POS)
+use_relay = true
+relay_server_selection = "auto"
+
+# Disable local address selection (use relay exclusively)
+direct_connection = false
+
+# Performance
+[performance]
+# Quality settings for fast remote connection
+video_quality = "medium"
+compression_level = 6
+network_bandwidth_limit_mbps = 0  # Unlimited
+
+# Update Settings
+[updates]
+# Check for updates daily
+check_updates = true
+update_interval_hours = 24
+auto_update = false
+
+# Disable any local management UI
+disable_ui = true

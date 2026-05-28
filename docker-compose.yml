@@ -1,0 +1,142 @@
+version: '3.9'
+
+services:
+  # RustDesk Signal Server (hbbs)
+  # Handles device registration, key exchange, and connection negotiation
+  hbbs:
+    image: rustdesk/rustdesk-server-s6:latest
+    container_name: rustdesk-hbbs
+    hostname: hbbs
+    networks:
+      - rustdesk-net
+    ports:
+      # TCP ports
+      - "${HBBS_PORT_21115}:21115"   # Signal server listening port
+      - "${HBBS_PORT_21116}:21116"   # TCP port for connection
+      - "${HBBS_PORT_21118}:21118"   # Web console port
+      # UDP ports
+      - "${HBBS_PORT_21116}:21116/udp"  # UDP for connection
+    volumes:
+      # Persistent storage for generated keys and configuration
+      - hbbs-data:/root
+      # Logs
+      - hbbs-logs:/var/log/rustdesk
+    environment:
+      RELAY: "${RUSTDESK_RELAY_SERVER}"
+      ENCRYPTED_ONLY: "1"
+      ADMIN_TOKEN: "your-admin-token-change-this"
+      CONN_DEFAULT_TIMEOUT: "30"
+      RELAY_IP: "${RUSTDESK_RELAY_HOST}"
+      RELAY_PORT: "${HBBR_PORT_21117}"
+    restart: always
+    healthcheck:
+      test: ["CMD", "ss", "-tlnup", "|", "grep", "21115"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "30"
+        labels: "service=hbbs"
+    labels:
+      - "app=rustdesk"
+      - "component=signal"
+
+  # RustDesk Relay Server (hbbr)
+  # Handles actual data relay between client and server
+  hbbr:
+    image: rustdesk/rustdesk-server-s6:latest
+    container_name: rustdesk-hbbr
+    hostname: hbbr
+    networks:
+      - rustdesk-net
+    ports:
+      # TCP ports
+      - "${HBBR_PORT_21117}:21117"   # Main relay port for data
+      - "${HBBR_PORT_21119}:21119"   # Secondary relay port
+      # UDP port for relay
+      - "${HBBR_PORT_21117}:21117/udp"
+    volumes:
+      # Data directory
+      - hbbr-data:/root
+      # Logs
+      - hbbr-logs:/var/log/rustdesk
+    environment:
+      RELAY: "127.0.0.1:21117"
+      ENCRYPTED_ONLY: "1"
+      CONN_DEFAULT_TIMEOUT: "300"
+      MAX_RELAY_CONNECTIONS: "${MAX_RELAY_CONNECTIONS}"
+      RELAY_TOKEN: "${RELAY_SECRET_KEY}"
+    restart: always
+    depends_on:
+      hbbs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "ss", "-tlnup", "|", "grep", "21117"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "30"
+        labels: "service=hbbr"
+    labels:
+      - "app=rustdesk"
+      - "component=relay"
+
+  # NGINX Reverse Proxy for Web Console (optional, for future phases)
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: rustdesk-nginx
+  #   networks:
+  #     - rustdesk-net
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./nginx/ssl:/etc/nginx/ssl:ro
+  #   depends_on:
+  #     - hbbs
+  #   restart: always
+
+volumes:
+  hbbs-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/hbbs
+  hbbs-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/hbbs/logs
+  hbbr-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/hbbr
+  hbbr-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/hbbr/logs
+
+networks:
+  rustdesk-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-rustdesk
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16
