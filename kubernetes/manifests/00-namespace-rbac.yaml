@@ -1,0 +1,227 @@
+---
+# RustDesk Kubernetes Phase 2
+# Namespace and RBAC Configuration
+# Production-grade setup with proper isolation and access control
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rustdesk-system
+  labels:
+    name: rustdesk-system
+    app: rustdesk
+    tier: platform
+  annotations:
+    description: "RustDesk enterprise remote access platform"
+
+---
+# ServiceAccount for RustDesk services
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rustdesk-sa
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: service-account
+
+---
+# RBAC: Admin role for RustDesk controllers
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rustdesk-admin
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+rules:
+  # Pod management
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  # Service management
+  - apiGroups: [""]
+    resources: ["services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  # ConfigMap and Secret access
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  # PVC access
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  # Deployment management
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+
+---
+# RBAC: Binding admin role to service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rustdesk-admin-binding
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rustdesk-admin
+subjects:
+  - kind: ServiceAccount
+    name: rustdesk-sa
+    namespace: rustdesk-system
+
+---
+# Network Policy: Default deny all ingress
+# Only explicitly allowed traffic will be permitted
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rustdesk-default-deny
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    policy: deny-all
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow all outbound traffic within namespace
+    - to:
+        - podSelector: {}
+
+---
+# Network Policy: Allow hbbs ingress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rustdesk-hbbs-allow
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbs
+spec:
+  podSelector:
+    matchLabels:
+      app: rustdesk
+      component: hbbs
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow TCP 21115 (signal server)
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 21115
+    # Allow TCP/UDP 21116 (connection relay)
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 21116
+        - protocol: UDP
+          port: 21116
+    # Allow TCP 21118 (web console)
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 21118
+
+---
+# Network Policy: Allow hbbr ingress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rustdesk-hbbr-allow
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbr
+spec:
+  podSelector:
+    matchLabels:
+      app: rustdesk
+      component: hbbr
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow TCP/UDP 21117 (main relay)
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 21117
+        - protocol: UDP
+          port: 21117
+    # Allow TCP 21119 (websocket relay)
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 21119
+
+---
+# Resource Quota: Limit namespace resource usage
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: rustdesk-quota
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: "16Gi"
+    limits.cpu: "16"
+    limits.memory: "32Gi"
+    pods: "20"
+    services: "10"
+    persistentvolumeclaims: "5"
+
+---
+# Limit Range: Default resource limits for pods
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: rustdesk-limits
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+spec:
+  limits:
+    # Pod limits
+    - type: Pod
+      max:
+        cpu: "4"
+        memory: "8Gi"
+      min:
+        cpu: "100m"
+        memory: "128Mi"
+    # Container limits
+    - type: Container
+      max:
+        cpu: "2"
+        memory: "4Gi"
+      min:
+        cpu: "100m"
+        memory: "128Mi"
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "250m"
+        memory: "256Mi"

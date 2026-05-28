@@ -1,0 +1,135 @@
+---
+# RustDesk Kubernetes Phase 2
+# MetalLB Configuration for Bare Metal Load Balancing
+# Required for local Kubernetes clusters (k3s, kubeadm) to provide LoadBalancer IPs
+
+---
+# Namespace for MetalLB (if not already installed)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metallb-system
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+
+---
+# MetalLB ConfigMap: Define IP address pool for LoadBalancer services
+# This needs to be customized for your network!
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config
+  namespace: metallb-system
+  labels:
+    app: metallb
+data:
+  config: |
+    # MetalLB configuration
+    # Define the address pool(s) for LoadBalancer services
+
+    # For k3s on Proxmox with IP range 192.168.1.100-192.168.1.110
+    # Adjust this based on your network
+    address-pools:
+      - name: default
+        protocol: layer2
+        addresses:
+          - 192.168.1.100-192.168.1.110  # Adjust to your network
+
+    # Optional: BGP configuration for advanced routing
+    # (Requires routers that support BGP)
+    # peers: []
+
+---
+# Alternative: Use IPAddressPool (newer MetalLB API)
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: rustdesk-pool
+  namespace: metallb-system
+  labels:
+    app: metallb
+spec:
+  addresses:
+    - 192.168.1.100-192.168.1.110  # ADJUST TO YOUR NETWORK!
+  # autoAssign: true  # Automatically assign IPs to LoadBalancer services
+  avoidBuggyIPs: true  # Avoid .0 and .255 addresses
+
+---
+# Advertisement: Announce LoadBalancer IP availability via Layer 2
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: rustdesk-l2
+  namespace: metallb-system
+  labels:
+    app: metallb
+spec:
+  ipAddressPools:
+    - rustdesk-pool
+  # Limit advertisement to specific interfaces (optional)
+  # interfaces:
+  #   - eth0
+
+---
+# Service: Expose hbbs externally (LoadBalancer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustdesk-hbbs-external
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbs
+    type: external
+  annotations:
+    description: "RustDesk signal server external service"
+    metallb.universe.tf/allow-shared-ip: "rustdesk-external"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local  # Preserve source IP
+  loadBalancerIP: 192.168.1.100  # Optional: specific IP assignment
+  selector:
+    app: rustdesk
+    component: hbbs
+  ports:
+    - name: signal
+      port: 21115
+      targetPort: 21115
+      protocol: TCP
+    - name: conn-tcp
+      port: 21116
+      targetPort: 21116
+      protocol: TCP
+    - name: conn-udp
+      port: 21116
+      targetPort: 21116
+      protocol: UDP
+    - name: console
+      port: 21118
+      targetPort: 21118
+      protocol: TCP
+
+---
+# Documentation: MetalLB Installation
+# If MetalLB is not already installed, install it with:
+#
+# kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.10/manifests/namespace.yaml
+# kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.10/manifests/metallb.yaml
+#
+# Or using Helm:
+# helm repo add metallb https://metallb.universe.tf
+# helm install metallb metallb/metallb --namespace metallb-system --create-namespace
+#
+# Verify MetalLB is running:
+# kubectl get pods -n metallb-system
+#
+# Check LoadBalancer service status:
+# kubectl get svc rustdesk-hbbr-external -n rustdesk-system -w
+#
+# Expected output after a few seconds:
+# NAME                       TYPE           CLUSTER-IP     EXTERNAL-IP      PORT(S)
+# rustdesk-hbbr-external     LoadBalancer   10.43.100.xxx  192.168.1.100    21117:xxxxx/TCP
+#
+# The EXTERNAL-IP should show a valid IP from your configured pool

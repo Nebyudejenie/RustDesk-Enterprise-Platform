@@ -1,0 +1,45 @@
+apiVersion: v2
+name: rustdesk
+description: RustDesk Enterprise Remote Access Platform - Kubernetes Helm Chart
+type: application
+
+# Chart version
+version: 1.0.0
+
+# Application version
+appVersion: "1.2.7"
+
+# Home page of the application
+home: https://github.com/rustdesk/rustdesk
+
+# Sources
+sources:
+  - https://github.com/rustdesk/rustdesk
+  - https://github.com/rustdesk/rustdesk-server
+
+# Chart maintainers
+maintainers:
+  - name: RustDesk Team
+    email: support@rustdesk.com
+  - name: Platform Team
+    email: platform@yourdomain.com
+
+# Keywords for searching
+keywords:
+  - remote-access
+  - rustdesk
+  - vnc
+  - remote-desktop
+  - enterprise
+
+# Categories
+kubeVersion: ">=1.20.0-0"
+
+# Icon (base64 encoded PNG or URL)
+icon: "https://rustdesk.com/img/logo.svg"
+
+# Keywords
+annotations:
+  # Helm Hub annotations
+  category: Cloud
+  licenses: AGPL-3.0

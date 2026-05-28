@@ -1,0 +1,378 @@
+---
+# RustDesk Kubernetes Phase 2
+# hbbr (Relay Server) Deployment with Horizontal Pod Autoscaler
+# Scales based on CPU and memory usage
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rustdesk-hbbr
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbr
+    tier: platform
+  annotations:
+    description: "RustDesk relay server (data transfer)"
+spec:
+  # hbbr can scale horizontally (multiple replicas)
+  replicas: 2  # Start with 2, will auto-scale via HPA
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: rustdesk
+      component: hbbr
+  template:
+    metadata:
+      labels:
+        app: rustdesk
+        component: hbbr
+        tier: platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "21117"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: rustdesk-sa
+
+      # Affinity rules for HA
+      affinity:
+        # Pod anti-affinity: spread relays across nodes
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - rustdesk
+                    - key: component
+                      operator: In
+                      values:
+                        - hbbr
+                topologyKey: kubernetes.io/hostname
+
+        # Pod affinity: prefer running near hbbs
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - rustdesk
+                    - key: component
+                      operator: In
+                      values:
+                        - hbbs
+                topologyKey: kubernetes.io/hostname
+
+        # Node affinity
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: node-type
+                    operator: In
+                    values:
+                      - compute
+                      - relay
+
+      # Termination grace period
+      terminationGracePeriodSeconds: 30
+
+      # Security context
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+        fsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: hbbr
+          image: rustdesk/rustdesk-server-s6:latest
+          imagePullPolicy: IfNotPresent
+
+          # Environment variables
+          env:
+            # Relay connects back to hbbs for coordination
+            - name: RELAY
+              value: "rustdesk-hbbs.rustdesk-system.svc.cluster.local:21117"
+
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: rustdesk-config
+                  key: LOG_LEVEL
+
+            - name: RELAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: rustdesk-secrets
+                  key: relay-secret-key
+
+            # Kubernetes metadata
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+            # Feature flags
+            - name: ENCRYPTED_ONLY
+              value: "1"
+
+            - name: CONN_DEFAULT_TIMEOUT
+              value: "300"
+
+            # Relay-specific
+            - name: MAX_RELAY_CONNECTIONS
+              value: "10000"
+
+            - name: RELAY_THREAD_COUNT
+              value: "16"
+
+          # Ports
+          ports:
+            - name: relay-tcp
+              containerPort: 21117
+              protocol: TCP
+              hostPort: 21117
+            - name: relay-udp
+              containerPort: 21117
+              protocol: UDP
+              hostPort: 21117
+            - name: relay-ws
+              containerPort: 21119
+              protocol: TCP
+              hostPort: 21119
+
+          # Volume mounts
+          volumeMounts:
+            - name: hbbr-storage
+              mountPath: /root
+              readOnly: false
+            - name: hbbr-logs
+              mountPath: /var/log/rustdesk
+              readOnly: false
+
+          # Resource requests and limits
+          resources:
+            requests:
+              cpu: 1000m
+              memory: 1Gi
+            limits:
+              cpu: 4000m
+              memory: 4Gi
+
+          # Liveness probe
+          livenessProbe:
+            tcpSocket:
+              port: 21117
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Readiness probe
+          readinessProbe:
+            tcpSocket:
+              port: 21117
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+
+          # Startup probe
+          startupProbe:
+            tcpSocket:
+              port: 21117
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+
+          # Security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - NET_BIND_SERVICE
+
+          # Lifecycle hooks
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+
+      volumes:
+        - name: hbbr-storage
+          persistentVolumeClaim:
+            claimName: rustdesk-hbbr-pvc
+        - name: hbbr-logs
+          emptyDir: {}
+
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+
+---
+# Service: Expose hbbr internally (ClusterIP)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustdesk-hbbr
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbr
+    type: internal
+  annotations:
+    description: "RustDesk relay server internal service"
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service
+  selector:
+    app: rustdesk
+    component: hbbr
+  ports:
+    - name: relay-tcp
+      port: 21117
+      targetPort: 21117
+      protocol: TCP
+    - name: relay-udp
+      port: 21117
+      targetPort: 21117
+      protocol: UDP
+    - name: relay-ws
+      port: 21119
+      targetPort: 21119
+      protocol: TCP
+  sessionAffinity: None
+
+---
+# Service: Expose hbbr externally (LoadBalancer)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustdesk-hbbr-external
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbr
+    type: external
+  annotations:
+    description: "RustDesk relay server external service (for POS devices)"
+    metallb.universe.tf/allow-shared-ip: "rustdesk-external"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local  # Preserve source IP
+  selector:
+    app: rustdesk
+    component: hbbr
+  ports:
+    - name: relay-tcp
+      port: 21117
+      targetPort: 21117
+      protocol: TCP
+    - name: relay-udp
+      port: 21117
+      targetPort: 21117
+      protocol: UDP
+    - name: relay-ws
+      port: 21119
+      targetPort: 21119
+      protocol: TCP
+
+---
+# Horizontal Pod Autoscaler: Scale hbbr based on CPU/Memory
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rustdesk-hbbr-hpa
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbr
+  annotations:
+    description: "Auto-scale hbbr relay servers based on CPU and memory"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rustdesk-hbbr
+
+  minReplicas: 2    # Minimum 2 relays for HA
+  maxReplicas: 10   # Maximum 10 relays
+
+  metrics:
+    # Scale on CPU usage
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70  # Scale up at 70% CPU
+    # Scale on memory usage
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80  # Scale up at 80% memory
+
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 minutes before scaling down
+      policies:
+        - type: Percent
+          value: 50  # Scale down by 50% max
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0  # Scale up immediately
+      policies:
+        - type: Percent
+          value: 100  # Double the replicas
+          periodSeconds: 30
+        - type: Pods
+          value: 2  # Or add 2 pods, whichever is greater
+          periodSeconds: 30
+      selectPolicy: Max
+
+---
+# Pod Disruption Budget: Ensure minimum availability during cluster updates
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rustdesk-hbbr-pdb
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbr
+spec:
+  minAvailable: 1  # At least 1 relay must always be available
+  selector:
+    matchLabels:
+      app: rustdesk
+      component: hbbr

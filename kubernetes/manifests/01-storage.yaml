@@ -1,0 +1,150 @@
+---
+# RustDesk Kubernetes Phase 2
+# Storage Configuration - StorageClass and PersistentVolumeClaims
+# Critical for key persistence and data durability
+
+---
+# StorageClass for local-path provisioner (for k3s and local k8s)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: rustdesk-local
+  labels:
+    app: rustdesk
+    type: local
+provisioner: rancher.io/local-path
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  nodeid: required
+
+---
+# PersistentVolumeClaim for hbbs (Signal Server)
+# Stores generated keys and device registration database
+# Must survive pod restarts and cluster updates
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rustdesk-hbbs-pvc
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbs
+    tier: storage
+  annotations:
+    description: "RustDesk signal server key and database storage"
+spec:
+  accessModes:
+    - ReadWriteOnce  # Single pod access (hbbs is not replicated)
+  storageClassName: rustdesk-local
+  resources:
+    requests:
+      storage: 5Gi  # 5GB for keys, db, and logs
+
+---
+# PersistentVolumeClaim for hbbr (Relay Server)
+# Stores relay configuration and logs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rustdesk-hbbr-pvc
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: hbbr
+    tier: storage
+  annotations:
+    description: "RustDesk relay server configuration and logs"
+spec:
+  accessModes:
+    - ReadWriteMany  # Multiple pods (for replicas)
+  storageClassName: rustdesk-local
+  resources:
+    requests:
+      storage: 10Gi  # 10GB for logs and temporary data
+
+---
+# Backup CronJob: Daily backup of hbbs keys
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rustdesk-hbbs-backup
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: backup
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: rustdesk
+            job-type: backup
+        spec:
+          serviceAccountName: rustdesk-sa
+          containers:
+            - name: backup
+              image: bitnami/kubectl:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Backing up hbbs keys..."
+                  kubectl cp rustdesk-system/rustdesk-hbbs-0:/root /tmp/hbbs-backup-$(date +%Y%m%d-%H%M%S) -c hbbs || true
+                  echo "Backup complete"
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          restartPolicy: OnFailure
+          backoffLimit: 3
+
+---
+# Backup CronJob: Daily backup of hbbr configuration
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rustdesk-hbbr-backup
+  namespace: rustdesk-system
+  labels:
+    app: rustdesk
+    component: backup
+spec:
+  schedule: "0 3 * * *"  # Daily at 3 AM UTC
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: rustdesk
+            job-type: backup
+        spec:
+          serviceAccountName: rustdesk-sa
+          containers:
+            - name: backup
+              image: bitnami/kubectl:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Backing up hbbr configuration..."
+                  kubectl cp rustdesk-system/rustdesk-hbbr-0:/root /tmp/hbbr-backup-$(date +%Y%m%d-%H%M%S) -c hbbr || true
+                  echo "Backup complete"
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+          restartPolicy: OnFailure
+          backoffLimit: 3
+
+---
+# Storage validation: Check if PVCs are bound
+# Run manually: kubectl get pvc -n rustdesk-system
+# Expected output: Both PVCs should show status "Bound"

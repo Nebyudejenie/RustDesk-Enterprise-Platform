@@ -1,0 +1,269 @@
+# RustDesk Helm Chart - Default Values
+# Override these values when deploying with:
+# helm install rustdesk ./kubernetes/helm -f custom-values.yaml
+
+# Global settings
+global:
+  namespace: rustdesk-system
+  environment: production  # production, staging, dev
+
+# Image configuration
+image:
+  repository: rustdesk/rustdesk-server-s6
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# hbbs (Signal Server) configuration
+hbbs:
+  enabled: true
+  replicaCount: 1  # hbbs should be a singleton
+
+  service:
+    type: ClusterIP
+    ports:
+      signal: 21115
+      connTcp: 21116
+      connUdp: 21116
+      console: 21118
+
+  externalService:
+    enabled: true
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/allow-shared-ip: "rustdesk-external"
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+  persistence:
+    enabled: true
+    storageClass: rustdesk-local
+    size: 5Gi
+    mountPath: /root
+
+  probes:
+    liveness:
+      enabled: true
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readiness:
+      enabled: true
+      initialDelaySeconds: 10
+      periodSeconds: 5
+
+  # Environment variables
+  config:
+    ENCRYPTED_ONLY: "1"
+    CONN_DEFAULT_TIMEOUT: "30"
+    LOG_LEVEL: "info"
+
+# hbbr (Relay Server) configuration
+hbbr:
+  enabled: true
+  replicaCount: 2  # hbbr scales horizontally
+
+  service:
+    type: ClusterIP
+    ports:
+      relayTcp: 21117
+      relayUdp: 21117
+      relayWs: 21119
+
+  externalService:
+    enabled: true
+    type: LoadBalancer
+    annotations:
+      metallb.universe.tf/allow-shared-ip: "rustdesk-external"
+
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 1Gi
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+
+  persistence:
+    enabled: true
+    storageClass: rustdesk-local
+    size: 10Gi
+    mountPath: /root
+
+  probes:
+    liveness:
+      enabled: true
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readiness:
+      enabled: true
+      initialDelaySeconds: 10
+      periodSeconds: 5
+
+  # Environment variables
+  config:
+    ENCRYPTED_ONLY: "1"
+    CONN_DEFAULT_TIMEOUT: "300"
+    MAX_RELAY_CONNECTIONS: "10000"
+    RELAY_THREAD_COUNT: "16"
+    LOG_LEVEL: "info"
+
+# Horizontal Pod Autoscaler for hbbr
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Network Policies
+networkPolicy:
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress
+
+# RBAC
+rbac:
+  create: true
+  serviceAccountName: rustdesk-sa
+
+# Secrets and ConfigMaps
+secrets:
+  create: true
+  relaySecretKey: "your-relay-secret-key-change-this-in-production"
+  permanentPassword: "POS@Enterprise2024!Secure"
+  adminToken: "your-admin-token-change-this-in-production"
+
+configMap:
+  create: true
+  relayHost: "rustdesk-hbbr.rustdesk-system.svc.cluster.local"
+  signalServer: "rustdesk-hbbs.rustdesk-system.svc.cluster.local:21115"
+
+# Ingress configuration (for web console)
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: rustdesk.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: rustdesk-tls
+      hosts:
+        - rustdesk.yourdomain.com
+
+# Storage configuration
+storage:
+  storageClass: rustdesk-local
+  accessMode: ReadWriteOnce
+  hbbsSize: 5Gi
+  hbbrSize: 10Gi
+
+# Backup configuration
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  retention: 30  # Days
+
+# Monitoring and metrics
+monitoring:
+  enabled: false
+  prometheus:
+    enabled: false
+    scrapeInterval: 15s
+  serviceMonitor:
+    enabled: false
+
+# Security context
+securityContext:
+  fsGroup: 0
+  runAsUser: 0
+
+# Node affinity
+nodeAffinity:
+  preferredDuringSchedulingIgnoredDuringExecution: true
+
+# Pod affinity
+podAffinity:
+  enabled: true
+
+# Pod anti-affinity
+podAntiAffinity:
+  enabled: true
+  weight: 100
+
+# Resource quotas
+resourceQuota:
+  enabled: true
+  cpu: "8"
+  memory: "16Gi"
+
+# Limit ranges
+limitRange:
+  enabled: true
+  max:
+    cpu: "4"
+    memory: "8Gi"
+  min:
+    cpu: "100m"
+    memory: "128Mi"
+
+# Service account
+serviceAccount:
+  create: true
+  name: rustdesk-sa
+  annotations: {}
+
+# Node selector
+nodeSelector: {}
+  # node-type: compute
+
+# Tolerations
+tolerations: []
+  # - key: "dedicated"
+  #   operator: "Equal"
+  #   value: "rustdesk"
+  #   effect: "NoSchedule"
+
+# Environment-specific overrides
+environments:
+  production:
+    replicaCount:
+      hbbs: 1
+      hbbr: 3
+    resources:
+      hbbr:
+        limits:
+          cpu: 4000m
+          memory: 4Gi
+  staging:
+    replicaCount:
+      hbbs: 1
+      hbbr: 2
+    resources:
+      hbbr:
+        limits:
+          cpu: 2000m
+          memory: 2Gi
+  dev:
+    replicaCount:
+      hbbs: 1
+      hbbr: 1
+    resources:
+      hbbr:
+        limits:
+          cpu: 1000m
+          memory: 1Gi
